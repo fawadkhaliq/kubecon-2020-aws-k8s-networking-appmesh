@@ -1,0 +1,257 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${APP_NAMESPACE}
+  labels:
+    mesh: ${MESH_NAME}
+    gateway: ingress
+    appmesh.k8s.aws/sidecarInjectorWebhook: enabled
+---
+apiVersion: appmesh.k8s.aws/v1beta2
+kind: Mesh
+metadata:
+  name: ${MESH_NAME}
+spec:
+  namespaceSelector:
+    matchLabels:
+      mesh: ${MESH_NAME}
+---
+apiVersion: appmesh.k8s.aws/v1beta2
+kind: VirtualGateway
+metadata:
+  name: ingress
+  namespace: ${APP_NAMESPACE}
+spec:
+  namespaceSelector:
+    matchLabels:
+      gateway: ingress
+  podSelector:
+    matchLabels:
+      app: ingress
+  listeners:
+    - portMapping:
+        port: 7373
+        protocol: http
+---
+apiVersion: appmesh.k8s.aws/v1beta2
+kind: GatewayRoute
+metadata:
+  name: gateway-route-headers
+  namespace: ${APP_NAMESPACE}
+spec:
+  httpRoute:
+    match:
+      prefix: "/"
+    action:
+      target:
+        virtualService:
+          virtualServiceRef:
+            name: front
+---
+apiVersion: appmesh.k8s.aws/v1beta2
+kind: VirtualNode
+metadata:
+  name: front
+  namespace: ${APP_NAMESPACE}
+spec:
+  podSelector:
+    matchLabels:
+      app: front
+  listeners:
+    - portMapping:
+        port: 8080
+        protocol: http
+  serviceDiscovery:
+    awsCloudMap:
+      namespaceName: ${CLOUDMAP_NAMESPACE}
+      serviceName: front
+  backends:
+    - virtualService:
+        virtualServiceRef:
+          name: colorapp
+---
+apiVersion: appmesh.k8s.aws/v1beta2
+kind: VirtualNode
+metadata:
+  name: colorapp
+  namespace: ${APP_NAMESPACE}
+spec:
+  podSelector:
+    matchLabels:
+      app: colorapp
+  listeners:
+    - portMapping:
+        port: 8080
+        protocol: http
+      outlierDetection:
+        maxServerErrors: 5
+        maxEjectionPercent: 100
+        interval:
+          value: 10
+          unit: s
+        baseEjectionDuration:
+          value: 10
+          unit: s
+  serviceDiscovery:
+    awsCloudMap:
+      namespaceName: ${CLOUDMAP_NAMESPACE}
+      serviceName: colorapp
+---
+apiVersion: appmesh.k8s.aws/v1beta2
+kind: VirtualService
+metadata:
+  name: colorapp
+  namespace: ${APP_NAMESPACE}
+spec:
+  awsName: colorapp.${APP_NAMESPACE}.svc.cluster.local
+  provider:
+    virtualNode:
+      virtualNodeRef:
+        name: colorapp
+---
+apiVersion: appmesh.k8s.aws/v1beta2
+kind: VirtualService
+metadata:
+  name: front
+  namespace: ${APP_NAMESPACE}
+spec:
+  awsName: front.${APP_NAMESPACE}.svc.cluster.local
+  provider:
+    virtualNode:
+      virtualNodeRef:
+        name: front
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: front
+  namespace: ${APP_NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: front
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: front
+        version: v1
+    spec:
+      containers:
+        - name: front
+          image: ${FRONT_APP_IMAGE}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: "PORT"
+              value: "8080"
+            - name: "COLOR_SERVICE_ENDPOINT"
+              value: "colorapp.${APP_NAMESPACE}.svc.cluster.local:8080"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: colorapp
+  namespace: ${APP_NAMESPACE}
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: colorapp
+  template:
+    metadata:
+      labels:
+        app: colorapp
+    spec:
+      containers:
+        - name: colorapp
+          image: ${COLOR_APP_IMAGE}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: "SERVER_PORT"
+              value: "8080"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vegeta-trafficgen
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vegeta-trafficgen
+  template:
+    metadata:
+      labels:
+        app: vegeta-trafficgen
+    spec:
+      containers:
+      - args:
+        - /bin/sh
+        image: ${VEGETA_IMAGE}
+        name: vegeta
+        stdin: true
+        tty: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: colorapp
+  namespace: ${APP_NAMESPACE}
+spec:
+  ports:
+    - protocol: TCP
+      port: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: front
+  namespace: ${APP_NAMESPACE}
+spec:
+  ports:
+    - port: 8080
+      name: http
+  selector:
+    app: front
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress
+  namespace: ${APP_NAMESPACE}
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 80
+      targetPort: 7373
+      name: http
+  selector:
+    app: ingress
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingress
+  namespace: ${APP_NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingress
+  template:
+    metadata:
+      labels:
+        app: ingress
+    spec:
+      containers:
+        - name: envoy
+          image: dummy-value-to-be-overrriden-by-injector
+          ports:
+            - containerPort: 7373
