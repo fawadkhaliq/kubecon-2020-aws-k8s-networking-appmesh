@@ -25,6 +25,10 @@ v1.2.0
 
 Let's deploy the sample applications and mesh with outlier detection. This will deploy two Virtual Nodes (and applications): `front` and `colorapp`, where `front`->`colorapp` and `colorapp` is the backend with five replicas.
 
+
+![Demo overview](overview.png)
+
+
 > You might need to set `VPC_ID` env as your cluster vpc id as this demo uses CloudMap service discovery
 
 ```
